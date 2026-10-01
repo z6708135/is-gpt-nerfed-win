@@ -8,9 +8,11 @@ The Windows integration targets the standalone Codex CLI. Desktop hook execution
 
 ## Current validation status
 
-For this branch, all 20 isolated tests passed: 18 Windows regressions and 2 calculation-parity checks. Five hook commands passed through real outer Windows PowerShell 5.1 and pwsh using synthetic session data. The passive scanner also read one explicitly selected real local session without starting inference or fingerprint probes.
+All 20 isolated tests passed: 18 Windows regressions and 2 calculation-parity checks. Five hook commands passed through real outer Windows PowerShell 5.1 and pwsh using synthetic session data. The passive scanner also read an explicitly selected real local session without starting inference or fingerprint probes.
 
-All five updated definitions were enabled and trusted in the reviewed local installation. This is installation metadata, not natural execution evidence. Native CLI and desktop lifecycle dispatch have not been observed and remain unverified; desktop orchestration mode was not established. Users must review and trust definitions in their own installations. No desktop support claim follows from a local project directory or a backend version.
+The reviewed local installation has five enabled, trusted definitions. A user-run ordinary, read-only turn in native Codex CLI 0.159.2 then naturally dispatched SessionStart, UserPromptSubmit, Stop, and SessionEnd. The plugin ledger contains one arrival for each event, separately from five earlier synthetic records; the matching session state records one passively scanned turn and an ended session, with zero probes or alerts. Verification created no additional model turn.
+
+That turn made no tool calls, so natural PreToolUse dispatch was not exercised; its Windows command remains covered by the isolated regression. The rollout did not retain hook exit-code metadata, so these results establish ledger arrivals and passive state updates rather than a claim about every hook exit code. Native desktop lifecycle dispatch and its orchestration mode remain unverified. Cloud-orchestrated dot command hooks are unsupported. Users must review and trust definitions in their own installations. Recorded model metadata and statistical matches do not prove server-side model identity.
 
 ## Attribution and license
 
