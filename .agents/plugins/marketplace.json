@@ -1,7 +1,7 @@
 {
-  "name": "is-gpt-nerfed",
+  "name": "is-gpt-nerfed-windows",
   "interface": {
-    "displayName": "is-gpt-nerfed"
+    "displayName": "Is GPT nerfed? (Windows, passive by default)"
   },
   "plugins": [
     {

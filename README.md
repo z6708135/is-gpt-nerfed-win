@@ -1,3 +1,7 @@
+> **Windows port:** This fork adds passive hooks for local Codex on Windows. See the [Windows guide (中文)](README.WINDOWS.zh-CN.md) and [port scope, attribution, and validation](docs/WINDOWS-PORT.md). Active fingerprint probes are disabled by default. Local hooks do not cover cloud-orchestrated ChatGPT Work (dot) conversations.
+>
+> Based on [kiyoakii/is-gpt-nerfed](https://github.com/kiyoakii/is-gpt-nerfed) at [`ff0d7c0`](https://github.com/kiyoakii/is-gpt-nerfed/commit/ff0d7c0c8fdc8713273b6570b1ada1838eaad84c). The upstream MIT license and third-party notices are retained. The original macOS documentation follows.
+
 <p align="center"><img src="docs/social-preview.png" width="880" alt="is-gpt-nerfed: shrinkflation detector for Codex"></p>
 
 English · [简体中文](README.zh-CN.md)

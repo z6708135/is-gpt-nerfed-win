@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """dgc — is-gpt-nerfed: transparent, local detection of silent model downgrades in Codex sessions.
 
-Three layers, all local, nothing leaves the machine:
+Passive scans and result files are local. Active probes contact the Codex service and consume quota;
+fork probes include a copy of selected persisted conversation history. Windows active probes are opt-in.
+Three layers:
 
   passive  Codex lifecycle hooks feed every turn into `nerfed hook`. The session rollout (JSONL) is scanned
            incrementally for silent model / reasoning-effort / context-window changes and for hidden
@@ -21,7 +23,6 @@ from __future__ import annotations
 import argparse
 import contextlib
 import datetime as dt
-import fcntl
 import glob
 import json
 import os
@@ -38,8 +39,12 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import codex_appserver as cas  # noqa: E402
 import modeltrace_core as core  # noqa: E402
+import platform_support as platform  # noqa: E402
 
-VERSION = "0.5.3"
+platform.configure_standard_streams()
+IS_WINDOWS = platform.IS_WINDOWS
+
+VERSION = "0.5.3-windows.2" if IS_WINDOWS else "0.5.3"
 DGC_BIN = os.path.abspath(__file__)
 SKILL_DIR = os.path.dirname(HERE)
 PLUGIN_ROOT = os.environ.get("PLUGIN_ROOT") or os.environ.get("CLAUDE_PLUGIN_ROOT") or os.path.dirname(os.path.dirname(SKILL_DIR))
@@ -65,7 +70,7 @@ UNKNOWN_ACCOUNT = "unknown"
 BANK_PATH = os.path.join(PLUGIN_ROOT, "assets", "modeltrace", "unified_bank.json")
 
 PLUGIN_NAME = "is-gpt-nerfed"
-MARKETPLACE_NAME = "is-gpt-nerfed"
+MARKETPLACE_NAME = "is-gpt-nerfed-windows" if IS_WINDOWS else "is-gpt-nerfed"
 SKILL_CMD = "$is-gpt-nerfed"
 SIDE_CMD = "/side $is-gpt-nerfed"
 APP_CODEX_BINS = [  # the desktop app's own codex: Resources/codex-cli/bin/codex since ChatGPT 26.924, Resources/codex before
@@ -77,21 +82,27 @@ APP_CODEX_BINS = [  # the desktop app's own codex: Resources/codex-cli/bin/codex
 CODEX_NOTIFICATION_WAV = "/Applications/ChatGPT.app/Contents/Resources/codex-notification.wav"
 
 DEFAULT_CONFIG = {
-    "frequency": "30m",              # "Nm" (minutes of activity) | "turns:N" | "manual"
-    "mode": "auto",                  # auto: background fork probe when due | nudge: only remind the user
+    "frequency": "manual" if IS_WINDOWS else "30m",  # no automatic Windows probes
+    "mode": "nudge" if IS_WINDOWS else "auto",
+    "active_probes": not IS_WINDOWS,  # Windows: explicit opt-in before any challenge, fork or model turn
+    "background_probes": not IS_WINDOWS,  # independent opt-in before detached workers
+    "auto_retries": not IS_WINDOWS,   # Windows: no extra model turns after transport errors/timeouts
+    "account_metadata": False,       # never open auth.json unless explicitly enabled
+    "discover_sessions": not IS_WINDOWS,  # Windows: no guesses/picker/audit of unrelated sessions
+    "record_tool_commands": not IS_WINDOWS,  # commands can contain secrets; omit them on Windows
     "queries": 3,                    # parallel ephemeral forks per probe (ModelTrace calibrates 1..3)
     "parallel": True,
     "languages": ["zh", "en"],
     "probe_timeout_s": 300,          # a fork that has not answered by then is replaced once (slow models must not drop out)
     "passive": True,                 # scan rollouts on every Stop hook
-    "notify": True,                  # macOS notification when the pet has something to say
+    "notify": not IS_WINDOWS,        # macOS notifications only; Windows prints cards / hook messages
     "notify_on_ok": False,           # also notify on MATCH verdicts
     "announce_ok": False,            # also push MATCH verdicts into the thread
-    "sound": True,                   # Codex notification sound on a downgrade verdict
+    "sound": not IS_WINDOWS,
     "halt_on_mismatch": False,       # Guard-style: deny work tools after a mismatch until `nerfed resume`
     "mismatch_confidence": 0.8,      # MISMATCH needs p(top) ≥ this, p(declared) ≤ 1-this and a score margin ≥ 0.5σ
     "confirm_uncertain": False,      # opt in: a SUSPICIOUS first round triggers one more round (three more answers)
-    "check_updates": True,           # every 10 min, one request to GitHub for the latest release tag; off = no network at all
+    "check_updates": not IS_WINDOWS, # no default Windows background network requests
     "probe_originator": "auto",      # the client the probes identify as: auto = the session's own (Codex Desktop, or the CLI)
     "hide_titles": False,            # panel shows "Session 1…N" and hides the account label (screenshot mode)
     "fresh_frequency": "manual",     # heartbeat for the fresh-session probe: "30m", "2h" … (time only; "manual" = off)
@@ -193,11 +204,7 @@ def safe_name(s: str) -> str:
 
 
 def pid_alive(pid) -> bool:
-    try:
-        os.kill(int(pid), 0)
-        return True
-    except Exception:
-        return False
+    return platform.pid_alive(pid)
 
 
 # ----------------------------------------------------------------------------------------- config
@@ -213,6 +220,24 @@ def load_config() -> dict:
     saved = read_json(CONFIG_PATH, {}) or {}
     cfg.update({k: v for k, v in saved.items() if not (k in OLD_DEFAULTS and v == OLD_DEFAULTS[k])})
     return cfg
+
+
+def active_enabled(cfg: dict) -> bool:
+    return cfg.get("active_probes") is True
+
+
+def require_active(cfg: dict) -> None:
+    if not active_enabled(cfg):
+        raise SystemExit("Active probes are disabled. They can copy the selected local session to the Codex service and "
+                         "consume account quota. Obtain approval for the intended operation before explicitly setting "
+                         "`nerfed config set active_probes true`.")
+    if os.environ.get("CODEX_SANDBOX_NETWORK_DISABLED") == "1":
+        raise SystemExit("Active probes cannot bypass this shell's network-disabled sandbox. "
+                         "Run an explicitly approved probe from an authorized shell.")
+
+
+def discovery_enabled(cfg: dict | None = None) -> bool:
+    return (cfg if cfg is not None else load_config()).get("discover_sessions") is True
 
 
 def save_config(cfg: dict) -> None:
@@ -238,7 +263,7 @@ def parse_frequency(s) -> tuple[str, int]:
 
 def coerce_config_value(key: str, value: str):
     if key in ("passive", "notify", "notify_on_ok", "announce_ok", "sound", "parallel", "halt_on_mismatch", "confirm_uncertain", "check_updates",
-               "hide_titles"):
+               "hide_titles", "active_probes", "background_probes", "auto_retries", "account_metadata", "discover_sessions", "record_tool_commands"):
         return str(value).strip().lower() in ("1", "true", "yes", "on")
     if key == "mismatch_confidence":
         v = float(value)
@@ -416,6 +441,8 @@ _BANK = None
 def current_account() -> dict:
     """Identify the signed-in Codex account from auth.json: a hash of the account id (never the id itself),
     a masked e-mail for display and the plan type. Nothing here leaves the machine."""
+    if load_config().get("account_metadata") is not True:
+        return {"id": UNKNOWN_ACCOUNT, "label": "account metadata disabled", "plan": None}
     import base64
     import hashlib
     d = read_json(os.path.join(CODEX_HOME, "auth.json"), {}) or {}
@@ -501,7 +528,8 @@ def db_query(sql: str, params=()) -> list[dict]:
     if not path:
         return []
     try:
-        con = sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=2)
+        from pathlib import Path
+        con = sqlite3.connect(Path(path).resolve().as_uri() + "?mode=ro", uri=True, timeout=2)
         con.row_factory = sqlite3.Row
         try:
             return [dict(r) for r in con.execute(sql, params).fetchall()]
@@ -522,6 +550,8 @@ def db_thread(tid: str) -> dict | None:
 
 
 def db_recent_main_threads(limit: int = 25) -> list[dict]:
+    if not discovery_enabled():
+        return []
     return db_query(f"SELECT {THREAD_COLS} FROM threads WHERE archived = 0 AND (thread_source IS NULL OR thread_source != 'subagent') "
                     f"ORDER BY updated_at_ms DESC LIMIT ?", (limit,))
 
@@ -709,14 +739,10 @@ def locked_session(sid: str):
     """Load-modify-save under an exclusive file lock (hooks and background workers touch the same file)."""
     ensure_dirs()
     lock_path = session_path(sid) + ".lock"
-    with open(lock_path, "a+") as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
-        try:
-            st = load_session(sid)
-            yield st
-            save_session(st)
-        finally:
-            fcntl.flock(lock, fcntl.LOCK_UN)
+    with platform.exclusive_file_lock(lock_path):
+        st = load_session(sid)
+        yield st
+        save_session(st)
 
 
 def all_sessions() -> list[dict]:
@@ -743,6 +769,8 @@ def link_session(st: dict) -> None:
     if st.get("transcript_path") and os.path.exists(st["transcript_path"]):
         st["kind"], st["link_method"] = "main", "transcript-path"
         return
+    if not discovery_enabled():
+        return
     parent = db_recent_main_thread(st.get("cwd"), exclude=st["sid"])
     if parent:
         st["parent_thread_id"], st["kind"], st["link_method"] = parent["id"], "side", "recent-main-thread-guess"
@@ -754,6 +782,8 @@ ACTIVE_WINDOW_S = 15 * 60  # a thread with a hook event this recent is "active":
 
 
 def probe_due(st: dict, cfg: dict, account: str | None = None) -> bool:
+    if not active_enabled(cfg):
+        return False
     try:
         kind, n = parse_frequency(cfg.get("frequency"))
     except ValueError:
@@ -787,6 +817,8 @@ def last_fresh_probe_ts(account_id: str | None = None) -> float | None:
 
 def fresh_due(cfg: dict, account_id: str) -> bool:
     """Heartbeat for the fresh-session probe: purely time-based, independent of thread activity."""
+    if not active_enabled(cfg) or cfg.get("background_probes") is not True:
+        return False
     try:
         kind, n = parse_frequency(cfg.get("fresh_frequency") or "manual")
     except ValueError:
@@ -798,17 +830,24 @@ def fresh_due(cfg: dict, account_id: str) -> bool:
 
 
 def spawn_fresh_worker() -> bool:
+    cfg = load_config()
+    if not active_enabled(cfg) or cfg.get("background_probes") is not True:
+        return False
+    if os.environ.get("CODEX_SANDBOX_NETWORK_DISABLED") == "1":
+        return False
     try:
-        with open(WORKER_LOG, "a") as log:
+        with open(WORKER_LOG, "a", encoding="utf-8") as log:
             subprocess.Popen([sys.executable, DGC_BIN, "worker", "--fresh"], stdout=log, stderr=log, stdin=subprocess.DEVNULL,
-                             start_new_session=True, env={k: v for k, v in os.environ.items() if not k.startswith("CODEX_SANDBOX")})
+                             env={**os.environ, "PYTHONUTF8": "1"}, **platform.process_options(background=True))
         return True
     except Exception as e:
         log_error(f"spawn_fresh_worker failed: {e}")
         return False
 
 
-def tool_command_preview(payload: dict) -> str:
+def tool_command_preview(payload: dict, for_log: bool = True) -> str:
+    if for_log and load_config().get("record_tool_commands") is not True:
+        return "[command omitted]"
     ti = payload.get("tool_input")
     cmd = None
     if isinstance(ti, dict):
@@ -826,7 +865,7 @@ def tool_command_preview(payload: dict) -> str:
 
 
 def is_dgc_command(payload: dict) -> bool:
-    cmd = tool_command_preview(payload)
+    cmd = tool_command_preview(payload, for_log=False)
     return "nerfed" in cmd or "is-gpt-nerfed" in cmd or "dgc" in cmd
 
 
@@ -850,7 +889,8 @@ def codex_version(path: str | None) -> str | None:
             _CODEX_VERSIONS[path] = hit.get("version")
         else:
             try:
-                out = subprocess.run([path, "--version"], stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=10).stdout
+                out = subprocess.run([path, "--version"], stdin=subprocess.DEVNULL, capture_output=True, text=True,
+                                     encoding="utf-8", errors="replace", timeout=10, **platform.process_options()).stdout
             except Exception:
                 out = ""
             m = re.search(r"\d+\.\d+\.\d+(?:-[0-9A-Za-z.]+)?", out)
@@ -870,9 +910,11 @@ def codex_version_key(v: str | None) -> tuple:
 
 
 def codex_candidates() -> list[str]:
-    """Every codex on this Mac: the ones on PATH, then the desktop app's own, each binary once."""
+    """Native CLI paths only; Windows shell shims are deliberately excluded."""
     seen, out = set(), []
-    for p in [os.path.join(d, "codex") for d in os.environ.get("PATH", "").split(os.pathsep) if d] + APP_CODEX_BINS:
+    paths = (platform.windows_codex_candidates(CODEX_HOME) if IS_WINDOWS else
+             [os.path.join(d, "codex") for d in os.environ.get("PATH", "").split(os.pathsep) if d] + APP_CODEX_BINS)
+    for p in paths:
         if os.path.isfile(p) and os.access(p, os.X_OK) and os.path.realpath(p) not in seen:
             seen.add(os.path.realpath(p))
             out.append(p)
@@ -884,8 +926,12 @@ def codex_bin(cfg: dict | None = None) -> str | None:
     sessions a newer desktop app saved, and the server refuses it newer models, so the newest has to win."""
     cfg = cfg or load_config()
     if cfg.get("codex_bin") and os.path.exists(cfg["codex_bin"]):
+        if IS_WINDOWS and not str(cfg["codex_bin"]).lower().endswith(".exe"):
+            raise SystemExit("Windows codex_bin must name a native codex.exe, not a .cmd/.bat shell wrapper")
         return cfg["codex_bin"]
     found = codex_candidates()
+    if IS_WINDOWS:
+        return found[0] if found else None  # passive discovery does not execute every candidate
     if len(found) > 1:
         return max(found, key=lambda p: codex_version_key(codex_version(p)))
     return found[0] if found else None
@@ -911,11 +957,10 @@ LINES = {
         "🎉 Congrats, and this time we mean it: you've been upgraded. Codex's own records say so: {detail}. Enjoy it while it lasts.",
     ],
     "MATCH": [
-        "All clear: the fingerprint says {top} ({p:.0%}), which is what you asked for. The model you're paying for actually showed up. Cherish it.",
-        "No downgrade detected: {top} at {p:.0%}. Suspiciously honest. I'll keep watching.",
+        "Fingerprint consistent with {top} ({p:.0%}) in this sample. Statistical attribution does not verify model identity.",
     ],
     "SUSPICIOUS": [
-        "Hmm. The fingerprint leans {top} ({p:.0%}) over your {expected} ({p_exp:.0%}), but not confidently enough to call it. I asked again and it is still murky. Watching.",
+        "Uncertain fingerprint: top candidate {top} ({p:.0%}); selected {expected} ({p_exp:.0%}). The confidence, sample count or score margin is too small for a verdict.",
     ],
     "UNLISTED": [
         "{expected} isn't in the fingerprint bank yet, so I can only tell you who it looks like: {top} ({p:.0%}). Not a verdict.",
@@ -1006,6 +1051,8 @@ def assess(expected: str | None, analysis: dict | None, hard_evidence: list[dict
     p(declared) ≤ 1 − confidence, and the fused z-score margin between them ≥ 0.5σ. Anything weaker is
     SUSPICIOUS. A MISMATCH also needs at least two answers: one answer is calibrated at 95.5 %, too thin to call
     a downgrade on."""
+    # MATCH uses the same probability threshold plus the runner-up gap and at least two answers.
+    # Neither verdict proves the identity of the serving model.
     conf = float((cfg or {}).get("mismatch_confidence") or DEFAULT_CONFIG["mismatch_confidence"])
     out = {"verdict": None, "direction": None, "p_top": None, "p_expected": None, "margin": None, "confidence": None, "top": None}
     if hard_evidence:
@@ -1030,7 +1077,14 @@ def assess(expected: str | None, analysis: dict | None, hard_evidence: list[dict
         return out
     out.update(p_expected=exp_row["probability"], margin=top["score"] - exp_row["score"])
     if top["model"] == exp:
-        out.update(verdict="MATCH", confidence="high" if top["probability"] >= conf else "low")
+        runner_up = results[1] if len(results) > 1 else None
+        gap = top["score"] - runner_up["score"] if runner_up else None
+        confident_match = (top["probability"] + 1e-9 >= conf and runner_up is not None
+                           and runner_up["probability"] <= 1 - conf + 1e-9
+                           and gap + 1e-9 >= MARGIN_SIGMA
+                           and int(analysis.get("used_outputs") or 0) >= 2)
+        out.update(verdict="MATCH" if confident_match else "SUSPICIOUS", margin=gap,
+                   confidence="high" if confident_match else "low")
         return out
     eps = 1e-9  # 0.80 ≥ 0.8 and 0.20 ≤ 1 − 0.8 must both hold despite binary floating point
     confident = (top["probability"] + eps >= conf and exp_row["probability"] <= (1 - conf) + eps
@@ -1201,6 +1255,7 @@ def resolve_originator(cfg: dict, codex_bin: str | None, thread_row: dict | None
 
 
 def run_fork_probe(thread_id: str, cfg: dict, queries: int | None = None, quiet: bool = False, originator: str | None = None) -> dict:
+    require_active(cfg)
     ensure_dirs()
     cb = codex_bin(cfg)
     if not cb:
@@ -1208,7 +1263,7 @@ def run_fork_probe(thread_id: str, cfg: dict, queries: int | None = None, quiet:
     q = max(1, min(3, int(queries or cfg.get("queries") or 3)))
     acct = note_account("probe")
     rec = {"id": cas.new_probe_id(), "mode": "fork", "thread_id": thread_id, "started": iso(), "ts_start": now(),
-           "queries": q, "status": "running", "dgc_version": VERSION, "pid": os.getpid(),
+           "queries": q, "status": "running", "dgc_version": VERSION, "pid": os.getpid(), "auto_retries": cfg.get("auto_retries") is True,
            "account": {k: acct.get(k) for k in ("id", "label", "plan")}}
     write_json(probe_path(rec["id"]), rec)
     with locked_session(thread_id) as st:
@@ -1235,7 +1290,7 @@ def run_fork_probe(thread_id: str, cfg: dict, queries: int | None = None, quiet:
         return cas.probe_thread(cb, thread_id, queries=n, languages=cfg.get("languages") or ["zh", "en"],
                                 timeout_s=float(cfg.get("probe_timeout_s") or 300), parallel=bool(cfg.get("parallel", True)),
                                 busy_wait_s=float(cfg.get("busy_wait_s") or 600), on_wait=on_wait, originator=orig,
-                                hints=hints)
+                                hints=hints, allow_active=True)
 
     outputs, errors, out = probe_round(runner, rec)
     expected = row.get("model")
@@ -1275,7 +1330,7 @@ def probe_round(runner, rec: dict) -> tuple[list[dict], list[str], dict | None]:
             log_event("probe_busy", level="warn", probe=rec["id"], sid=rec.get("thread_id"), error=str(e)[:300])
             return [], [f"thread stayed busy: {e}"], None
         except cas.AppServerError as e:
-            if attempt < 2 and transport_like([str(e)]):
+            if rec.get("auto_retries", not IS_WINDOWS) and attempt < 2 and transport_like([str(e)]):
                 rec["retries"] = int(rec.get("retries") or 0) + 1
                 log_event("probe_retry", level="warn", probe=rec["id"], sid=rec.get("thread_id"), attempt=attempt, error=str(e)[:300])
                 time.sleep(8)
@@ -1292,7 +1347,7 @@ def probe_round(runner, rec: dict) -> tuple[list[dict], list[str], dict | None]:
                   fork_errors=len(errors), elapsed_s=out.get("elapsed_s"), last_turn=(out.get("thread") or {}).get("last_turn"),
                   last_turn_status=(out.get("thread") or {}).get("last_turn_status"), rate_limits=out.get("rate_limits"),
                   forks=[fork_summary(f) for f in out.get("forks") or []])
-        if not outputs and attempt < 2 and errors and transport_like(errors):
+        if rec.get("auto_retries", not IS_WINDOWS) and not outputs and attempt < 2 and errors and transport_like(errors):
             rec["retries"] = int(rec.get("retries") or 0) + 1
             log_event("probe_retry", level="warn", probe=rec["id"], sid=rec.get("thread_id"), attempt=attempt, error=errors[0][:300])
             time.sleep(8)
@@ -1304,6 +1359,8 @@ def top_up_timeouts(rec: dict, outputs: list[dict], errors: list[str], wanted: i
                     mode: str | None = None) -> tuple[list[dict], list[str]]:
     """A fork that did not answer within the deadline is replaced once, so that a slow model does not drop out of
     the sample and leave the verdict to whichever model answered fast."""
+    if not rec.get("auto_retries", not IS_WINDOWS):
+        return outputs, errors
     missing = int(wanted) - len(outputs)
     timed_out = [e for e in errors if "timed out" in e or "deadline" in e]
     if missing <= 0 or not timed_out or rec.get("topped_up"):
@@ -1341,6 +1398,7 @@ def default_model_settings() -> tuple[str | None, str | None]:
 def run_fresh_probe(cfg: dict, model: str | None = None, effort: str | None = None, queries: int | None = None, quiet: bool = False,
                     originator: str | None = None) -> dict:
     """Global probe: brand-new ephemeral sessions, no history. Answers 'what does a new session get right now?'."""
+    require_active(cfg)
     ensure_dirs()
     cb = codex_bin(cfg)
     if not cb:
@@ -1353,6 +1411,7 @@ def run_fresh_probe(cfg: dict, model: str | None = None, effort: str | None = No
     acct = note_account("probe")
     rec = {"id": cas.new_probe_id(), "mode": "fresh", "thread_id": None, "started": iso(), "ts_start": now(), "queries": q,
            "status": "running", "dgc_version": VERSION, "pid": os.getpid(), "requested_model": model, "requested_effort": effort,
+           "auto_retries": cfg.get("auto_retries") is True,
            "account": {k: acct.get(k) for k in ("id", "label", "plan")}}
     write_json(probe_path(rec["id"]), rec)
     write_json(os.path.join(NERFED_HOME, FRESH_RUNNING), {"pid": os.getpid(), "ts": now(), "probe": rec["id"]})
@@ -1368,7 +1427,7 @@ def run_fresh_probe(cfg: dict, model: str | None = None, effort: str | None = No
     def runner(n: int = q):
         return cas.probe_fresh(cb, model, effort=effort, queries=n, languages=cfg.get("languages") or ["zh", "en"],
                                timeout_s=float(cfg.get("probe_timeout_s") or 300), parallel=bool(cfg.get("parallel", True)),
-                               originator=orig)
+                               originator=orig, allow_active=True)
 
     try:
         outputs, errors, out = probe_round(runner, rec)
@@ -1405,11 +1464,15 @@ def transport_like(errors: list[str]) -> bool:
 
 
 def spawn_worker(thread_id: str, cfg: dict) -> bool:
+    if not active_enabled(cfg) or cfg.get("background_probes") is not True:
+        return False
+    if os.environ.get("CODEX_SANDBOX_NETWORK_DISABLED") == "1":
+        return False
     try:
-        with open(WORKER_LOG, "a") as log:
+        with open(WORKER_LOG, "a", encoding="utf-8") as log:
             subprocess.Popen([sys.executable, DGC_BIN, "worker", "--thread", thread_id], stdout=log, stderr=log,
-                             stdin=subprocess.DEVNULL, start_new_session=True,
-                             env={k: v for k, v in os.environ.items() if not k.startswith("CODEX_SANDBOX")})
+                             stdin=subprocess.DEVNULL, env={**os.environ, "PYTHONUTF8": "1"},
+                             **platform.process_options(background=True))
         return True
     except Exception as e:
         log_error(f"spawn_worker failed: {e}")
@@ -1420,6 +1483,8 @@ def run_schedule(st: dict, cfg: dict, acct: dict, messages: list, via: str = "ho
     """The probe schedule for one main session (call it under the session's lock): launch a worker in mode auto,
     or queue a nudge in mode nudge. The Stop hook runs it after every turn; `tick` runs it for threads that are due
     but quiet. Returns True when a worker was launched."""
+    if not active_enabled(cfg):
+        return False
     sid = st["sid"]
     running = st.get("probe_running")
     if running and not pid_alive(running.get("pid")):
@@ -1466,6 +1531,7 @@ def challenge_text(rec: dict, index: int) -> str:
 
 
 def start_self_probe(parent_id: str | None, side_id: str | None, cfg: dict, expected: str | None) -> int:
+    require_active(cfg)
     ensure_dirs()
     q = max(1, min(3, int(cfg.get("queries") or 3)))
     rng = random.Random()
@@ -1480,6 +1546,7 @@ def start_self_probe(parent_id: str | None, side_id: str | None, cfg: dict, expe
 
 def cmd_probe_submit_numbers(args) -> int:
     cfg = load_config()
+    require_active(cfg)
     rec = read_json(probe_path(args.probe_id))
     if not rec or rec.get("mode") != "self":
         raise SystemExit("unknown self-answer probe id")
@@ -1518,6 +1585,8 @@ def resolve_thread(thread_arg: str | None) -> tuple[str | None, str]:
     for var in ("CODEX_THREAD_ID", "CODEX_SESSION_ID"):
         if os.environ.get(var):
             return os.environ[var], var
+    if not discovery_enabled():
+        return None, "none (session discovery disabled)"
     cwd = os.getcwd()
     cutoff = now() - 30 * 60
     for e in reversed(tail_jsonl(EVENTS_PATH, 400)):
@@ -1566,6 +1635,10 @@ def fit(s, width: int) -> str:
 
 def pick_probe_target(cfg: dict):
     """Interactive picker (vendored simple-term-menu). Returns ("fresh", None), ("thread", id) or None on escape."""
+    if IS_WINDOWS:
+        raise SystemExit("The POSIX terminal picker is unavailable on native Windows; pass --thread <id> or probe fresh")
+    if not discovery_enabled(cfg):
+        raise SystemExit("Session discovery is disabled; pass --thread <id>")
     sys.path.insert(0, os.path.join(HERE, "vendor"))
     try:
         from simple_term_menu import TerminalMenu
@@ -1597,8 +1670,9 @@ def pick_probe_target(cfg: dict):
 
 def cmd_probe_now(args) -> int:
     cfg = load_config()
+    require_active(cfg)
     ensure_dirs()
-    interactive = (not args.thread and not getattr(args, "no_pick", False)
+    interactive = (not IS_WINDOWS and discovery_enabled(cfg) and not args.thread and not getattr(args, "no_pick", False)
                    and not any(os.environ.get(v) for v in ("CODEX_THREAD_ID", "CODEX_SESSION_ID"))
                    and sys.stdin.isatty() and sys.stdout.isatty())
     if interactive:
@@ -1627,19 +1701,15 @@ def cmd_probe_now(args) -> int:
                 parent = row["id"] if row else None
         return start_self_probe(parent, side_id, cfg, expected_model_for(parent or tid))
     log_event("probe_requested", sid=tid, via=how, mode=mode, sandboxed=os.environ.get("CODEX_SANDBOX_NETWORK_DISABLED") == "1")
-    if os.environ.get("CODEX_SANDBOX_NETWORK_DISABLED") == "1" and not args.force:
-        with locked_session(tid) as st:
-            st["requested"] = True
-        print(f"Queued (session {tid}, via {how}): this shell runs inside Codex's network-less sandbox, so the probe will start "
-              "in the background the moment this turn ends. The verdict pops up as a notification; it is also shown at the "
-              f"start of the next turn and in `{DGC_BIN} report`.")
-        return 0
     run_fork_probe(tid, cfg, queries=args.queries, quiet=False, originator=getattr(args, "originator", None))
     return 0
 
 
 def cmd_worker(args) -> int:
     cfg = load_config()
+    require_active(cfg)
+    if cfg.get("background_probes") is not True:
+        raise SystemExit("Background probes are disabled; run an explicitly approved foreground probe instead")
     if getattr(args, "fresh", False) or not args.thread:
         if fresh_running():
             print(f"{iso()} fresh probe already running; skipping")
@@ -1666,7 +1736,7 @@ def cmd_tick(args) -> int:
     due time passes while it is quiet would wait for a Stop event that may never come (a session finished at
     minute 29 is never probed). The app calls this whenever the snapshot shows a thread that is due and active."""
     cfg = load_config()
-    if cfg.get("mode") != "auto":
+    if not active_enabled(cfg) or cfg.get("background_probes") is not True or cfg.get("mode") != "auto":
         print(f"{iso()} tick: mode is {cfg.get('mode')}; probes are offered inside the thread, nothing to launch")
         return 0
     ensure_dirs()
@@ -1691,6 +1761,7 @@ def cmd_tick(args) -> int:
 
 def cmd_probe_fresh(args) -> int:
     cfg = load_config()
+    require_active(cfg)
     if fresh_running():
         raise SystemExit("a fresh-session probe is already running")
     run_fresh_probe(cfg, model=args.model, effort=args.effort, queries=args.queries, quiet=False, originator=getattr(args, "originator", None))
@@ -1698,6 +1769,29 @@ def cmd_probe_fresh(args) -> int:
 
 
 # ---------------------------------------------------------------------------------------- hooks
+
+
+def validated_hook_rollout(sid: str, path: str | None) -> str | None:
+    """Windows hooks may scan only a local rollout bound to this exact hook session.
+
+    Check the sessions root and filename before reading just its session_meta header. No content from
+    arbitrary files, credentials, guessed parents or other session ids is opened by a hook.
+    """
+    if not path or not IS_WINDOWS:
+        return path
+    try:
+        real = os.path.realpath(os.path.abspath(path))
+        root = os.path.realpath(os.path.join(CODEX_HOME, "sessions"))
+        if (os.path.normcase(os.path.commonpath((real, root))) != os.path.normcase(root)
+                or not real.lower().endswith(".jsonl") or sid not in os.path.basename(real)):
+            return None
+        with open(real, "rb") as rollout:
+            header = json.loads(rollout.readline(1 << 20))
+        if header.get("type") != "session_meta" or (header.get("payload") or {}).get("id") != sid:
+            return None
+        return real
+    except (OSError, ValueError, TypeError, AttributeError):
+        return None
 
 
 def deliver_alerts(st: dict, out: dict, model_visible: bool, cfg: dict) -> None:
@@ -1732,6 +1826,8 @@ def cmd_hook(args) -> int:
         payload = {"_unparsed": raw[:2000]}
     ev = payload.get("hook_event_name") or payload.get("hookEventName") or args.event or "unknown"
     sid = str(payload.get("session_id") or payload.get("thread_id") or payload.get("threadId") or "unknown")
+    if sid == "unknown" or safe_name(sid) != sid:
+        return 0
     if os.environ.get("NERFED_PROBE_PROCESS"):  # hooks fired by our own probe app-server: ignore
         return 0
     cfg = load_config()
@@ -1756,6 +1852,7 @@ def cmd_hook(args) -> int:
                 st[k] = payload[k]
         if st["kind"] in ("unknown", "side") or ev == "SessionStart":
             link_session(st)
+        st["transcript_path"] = validated_hook_rollout(sid, st.get("transcript_path"))
         if ev == "SessionStart":
             log_event("session_start", sid=sid, session_kind=st.get("kind"), model=payload.get("model"), cwd=payload.get("cwd"),
                       source=payload.get("source"), account=acct["id"])
@@ -1907,6 +2004,8 @@ def interactive_thread(row: dict | None) -> bool:
 
 
 def db_recent_threads_detailed(since_ms: int, limit: int = 40) -> list[dict]:
+    if not discovery_enabled():
+        return []
     base = (f"FROM threads WHERE archived = 0 AND (thread_source IS NULL OR thread_source != 'subagent') "
             f"AND (originator IS NULL OR originator NOT LIKE 'codex_exec%') "
             f"AND updated_at_ms >= ? ORDER BY updated_at_ms DESC LIMIT ?")
@@ -2352,6 +2451,8 @@ def fetch_latest_release(u: dict) -> dict:
 def cmd_update_install(args) -> int:
     """Download the latest release, verify its checksum, replace the app bundle (the old one goes to the Trash) and
     relaunch it. What the panel's update link runs, detached, so it survives the app it replaces."""
+    if IS_WINDOWS:
+        raise SystemExit("The macOS bundle updater is unavailable on Windows. Review a new Windows port and use install-windows.ps1.")
     import hashlib
     import plistlib
     import shutil
@@ -2490,7 +2591,8 @@ def maybe_check_updates(cfg: dict) -> dict:
             write_json(UPDATE_PATH, {**u, "started_ts": now()})
             try:
                 subprocess.Popen([sys.executable, DGC_BIN, "update-check"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                                 stdin=subprocess.DEVNULL, start_new_session=True)
+                                 stdin=subprocess.DEVNULL, env={**os.environ, "PYTHONUTF8": "1"},
+                                 **platform.process_options(background=True))
             except Exception as e:
                 log_error(f"update check spawn failed: {e}")
     return status
@@ -2499,6 +2601,8 @@ def maybe_check_updates(cfg: dict) -> dict:
 def cmd_update_check(args) -> int:
     """One request to GitHub: the latest release tag. Notifies once per new version."""
     cfg = load_config()
+    if cfg.get("check_updates") is not True:
+        raise SystemExit("Network update checks are disabled; enable check_updates only after approval")
     rec = fetch_latest_release(read_json(UPDATE_PATH, {}) or {})
     available = bool(rec.get("latest")) and version_tuple(rec["latest"]) > version_tuple(VERSION)
     log_event("update_check", latest=rec.get("latest"), available=available, error=rec.get("error"))
@@ -2517,7 +2621,7 @@ def hooks_status(cfg: dict, max_age_s: float = 900, force: bool = False) -> dict
     cached = read_json(HOOKS_STATUS_PATH, {}) or {}
     cb = codex_bin(cfg)
     fresh = cached.get("checked_ts") and (now() - float(cached["checked_ts"])) < max_age_s and cached.get("bin") == cb
-    if force or not fresh:
+    if force or (not IS_WINDOWS and not fresh):  # passive Windows status never starts app-server
         if not cb:
             cached = {**cached, "checked_ts": now(), "checked": iso(), "bin": None, "error": "codex binary not found", "state": "unknown"}
             write_json(HOOKS_STATUS_PATH, cached)
@@ -2555,7 +2659,7 @@ def hooks_status(cfg: dict, max_age_s: float = 900, force: bool = False) -> dict
     out["desktop_loaded"] = bool(last_desktop)
     # after an upgrade the desktop keeps running the previous cached copy until it reloads: compare the newest
     # desktop hook event with the install time of the current version's cache directory
-    cache_dir = os.path.join(CODEX_HOME, "plugins", "cache", PLUGIN_NAME, PLUGIN_NAME, VERSION)
+    cache_dir = os.path.join(CODEX_HOME, "plugins", "cache", MARKETPLACE_NAME, PLUGIN_NAME, VERSION)
     installed_ts = os.path.getmtime(cache_dir) if os.path.isdir(cache_dir) else None
     last_desktop_ts = parse_iso(last_desktop) if last_desktop else None
     out["installed_ago"] = ago(installed_ts) if installed_ts else None
@@ -2720,7 +2824,7 @@ def rollout_for(thread: str | None, path: str | None) -> str:
         return path
     if thread:
         row = db_thread(thread)
-        if not row:
+        if not row and discovery_enabled():
             rows = db_query(f"SELECT {THREAD_COLS} FROM threads WHERE id LIKE ? ORDER BY updated_at_ms DESC LIMIT 1", (thread + "%",))
             row = rows[0] if rows else None
         if row and row.get("rollout_path"):
@@ -2747,6 +2851,8 @@ def cmd_scan(args) -> int:
 
 
 def cmd_audit(args) -> int:
+    if not discovery_enabled():
+        raise SystemExit("Cross-session auditing is disabled. Use scan --thread <exact-id> or --rollout <approved-path>.")
     since = now() - float(args.days) * 86400
     files = sorted((p for p in glob.glob(os.path.join(CODEX_HOME, "sessions", "**", "*.jsonl"), recursive=True) if os.path.getmtime(p) >= since),
                    key=os.path.getmtime)
@@ -2863,7 +2969,8 @@ def manifest_paths() -> list[str]:
 
 def run(cmd: list[str], timeout: int = 120) -> tuple[int, str]:
     try:
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout,
+                           **platform.process_options())
         return r.returncode, (r.stdout + r.stderr).strip()
     except Exception as e:
         return 1, str(e)
@@ -2882,6 +2989,8 @@ def plugin_enabled_in_config() -> bool:
 
 
 def cmd_setup(args) -> int:
+    if IS_WINDOWS:
+        raise SystemExit("Use the reviewed install-windows.ps1 on Windows; this legacy setup edits macOS configuration and symlinks.")
     cfg = load_config()
     ensure_dirs()
     root = os.path.dirname(PLUGIN_ROOT)
@@ -2968,6 +3077,8 @@ def cmd_setup(args) -> int:
 
 
 def cmd_teardown(args) -> int:
+    if IS_WINDOWS:
+        raise SystemExit("Use uninstall-windows.ps1 on Windows; legacy teardown can rewrite unrelated configuration.")
     cfg = load_config()
     cb = codex_bin(cfg)
     if cb:
@@ -3011,7 +3122,8 @@ def cmd_doctor(args) -> int:
           "set config codex_bin or put codex on PATH")
     for other in (p for p in codex_candidates() if cb and os.path.realpath(p) != os.path.realpath(cb)):
         print(f"     also found {other} ({codex_version(other) or 'version unknown'}), not used")
-    saved = (db_query("SELECT cli_version FROM threads WHERE cli_version != '' ORDER BY updated_at DESC LIMIT 1") or [{}])[0].get("cli_version")
+    saved = ((db_query("SELECT cli_version FROM threads WHERE cli_version != '' ORDER BY updated_at DESC LIMIT 1") or [{}])[0].get("cli_version")
+             if discovery_enabled(cfg) else None)
     if cb and saved and codex_version_key(codex_version(cb)) < codex_version_key(saved):
         print(f"  ⚠️  codex {codex_version(cb)} is older than the Codex that saved your latest session ({saved}); probes may be "
               "refused → update it, or unset codex_bin")
@@ -3031,10 +3143,10 @@ def cmd_doctor(args) -> int:
         hooks = m.get("hooks") or ((m.get("extensions") or {}).get("com.openai") or {}).get("hooks")
         text = json.dumps(hooks) if hooks else ""
         check(bool(hooks), f"hooks declared in {os.path.relpath(p, PLUGIN_ROOT)}")
-        check("${PLUGIN_ROOT" in text and "exit 0" in text,
-              "hook commands locate the plugin through ${PLUGIN_ROOT} and never block when the file is missing")
+        check(("hook-windows.ps1" in text if IS_WINDOWS else "${PLUGIN_ROOT" in text and "exit 0" in text),
+              "hook commands use the platform wrapper and fail open when the plugin is unavailable")
     stable = os.path.join(NERFED_HOME, "plugin")
-    check(os.path.exists(os.path.join(stable, "skills", "is-gpt-nerfed", "scripts", "nerfed")) if os.path.exists(CONFIG_PATH) else True,
+    check(True if IS_WINDOWS else os.path.exists(os.path.join(stable, "skills", "is-gpt-nerfed", "scripts", "nerfed")) if os.path.exists(CONFIG_PATH) else True,
           f"fallback plugin path {stable} → {os.path.realpath(stable) if os.path.exists(stable) else 'missing'}", "run ./install.sh")
     text = config_toml_text()
     check(plugin_enabled_in_config(), f'[plugins."{PLUGIN_NAME}@…"] enabled = true in config.toml', "run ./install.sh")
@@ -3067,6 +3179,7 @@ def cmd_doctor(args) -> int:
     except ValueError as e:
         check(False, str(e))
     if getattr(args, "fork", False):
+        require_active(cfg)
         tid = args.thread
         if not tid:
             rows = db_recent_main_threads(1)
@@ -3075,7 +3188,7 @@ def cmd_doctor(args) -> int:
             check(False, "fork doctor needs a session id and a codex binary")
         else:
             try:
-                r = cas.fork_doctor(cb, tid)
+                r = cas.fork_doctor(cb, tid, allow_active=True)
                 check(True, f"ephemeral fork of {short(tid, 12)} ({r['model']} @ {r['effort']}) created in {r['elapsed_s']}s with 0 inference requests")
             except Exception as e:
                 check(False, f"ephemeral fork failed: {e}")
@@ -3134,7 +3247,7 @@ def cmd_selftest(args) -> int:
     expect(kinds.get("silent_model_change") == "hard" and kinds.get("hidden_model") == "hard" and kinds.get("context_window_change") == "hard", f"passive scan finds silent downgrade: {kinds}")
     st = new_session("s1")
     st["kind"], st["turns"] = "main", 8
-    expect(probe_due(st, {"frequency": "turns:8", "nudge_cooldown_turns": 4}), "probe due after N turns")
+    expect(probe_due(st, {"active_probes": True, "frequency": "turns:8", "nudge_cooldown_turns": 4}), "probe due after N turns when enabled")
     fake = {"prediction": "gpt-5.6-luna", "probability": 0.9, "used_outputs": 3,
             "results": [{"model": "gpt-5.6-luna", "probability": 0.9, "score": 2.0}, {"model": "gpt-6-astra", "probability": 0.05, "score": 0.2},
                         {"model": "gpt-5.5", "probability": 0.05, "score": 0.1}],
@@ -3173,7 +3286,9 @@ METHOD = f"""is-gpt-nerfed — how the verdict is made (v{VERSION})
    enrolled from the official Codex subscription; cross-validated accuracy 95.5% with 1 answer, 99.6% with 2,
    100% with 3). Verdict: the session's declared model vs the attribution, behind a confidence gate, because the
    calibrated softmax amplifies small score gaps (a "100%" can hide a thin margin):
-     MATCH        top candidate = declared model
+     MATCH        top candidate = declared model, at least two answers, p(top) reaches the confidence threshold,
+                  p(runner-up) is below 1 - confidence, and top/runner-up score gap reaches the margin threshold.
+                  This means statistical consistency in the sample, not verified model identity.
      MISMATCH     top candidate ≠ declared model AND p(top) ≥ {DEFAULT_CONFIG['mismatch_confidence']:.0%} AND p(declared) ≤ {1 - DEFAULT_CONFIG['mismatch_confidence']:.0%}
                   AND fused z-score margin ≥ {MARGIN_SIGMA}σ (direction: downgrade / upgrade / lateral by family and size tags)
      SUSPICIOUS   top candidate ≠ declared model but the gate is not met; the runner adds one more round of forks
@@ -3189,7 +3304,11 @@ WHAT IT CANNOT DO
   • Attribution is closed-set: a model outside the bank is mapped to its nearest look-alike. A quantised or
     "dumbed-down" variant that keeps the slug only shows up if its number distribution drifts.
   • Probes fork from persisted history: a turn still in flight is not included.
-Everything is stored locally under {NERFED_HOME}; nothing is uploaded. Read the ledger yourself: probes/*.json.
+Result files are stored under {NERFED_HOME}. Active probes send requests to the Codex service and consume quota;
+fork probes use a copy of the selected persisted history. Ephemeral does not mean offline.
+Windows defaults disable active probes, automatic retries, background workers, account metadata, discovery and updates.
+Extra rounds require confirm_uncertain; automatic retry/top-up requires auto_retries. Neither is enabled by default on Windows.
+Read the ledger yourself: probes/*.json.
 Credits: fingerprint bank, scorer and probe prompts from https://github.com/xqy2006/ModelTrace (MIT).
 """
 
@@ -3212,7 +3331,7 @@ def build_parser() -> argparse.ArgumentParser:
     a.add_argument("--thread", help="session id (default: $CODEX_THREAD_ID)")
     a.add_argument("--queries", type=int, default=None)
     a.add_argument("--mode", choices=["auto", "fork", "self"], default="auto")
-    a.add_argument("--force", action="store_true", help="run inline even inside a network-less sandbox")
+    a.add_argument("--force", action="store_true", help="legacy flag; network-disabled sandbox restrictions still apply")
     a.add_argument("--no-pick", action="store_true", help="skip the interactive picker and guess the session")
     a.add_argument("--originator", help="identify the probe as this client (default: the session's own, e.g. 'Codex Desktop')")
     a.set_defaults(fn=cmd_probe_now)

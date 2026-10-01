@@ -1,7 +1,7 @@
 {
   "name": "is-gpt-nerfed",
-  "version": "0.5.3",
-  "description": "Transparent, user-controlled detection of silent model downgrades in Codex sessions: a zero-token passive scan of the session rollout on every turn, plus ModelTrace fingerprint probes run in ephemeral forks of the thread (the mechanism behind /side) on a schedule you choose. Verdicts are delivered as a snarky card.",
+  "version": "0.5.3-windows.2",
+  "description": "Windows port: passive inspection of the current local Codex session by default. Statistical fingerprint probes require explicit approval and an opt-in configuration; they use Codex account inference and do not prove model identity.",
   "author": {
     "name": "is-gpt-nerfed contributors"
   },
@@ -25,7 +25,8 @@
               "type": "command",
               "command": "sh -c 'command -v python3 >/dev/null 2>&1 || exit 0; P=\"${PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}\"; S=\"$P/skills/is-gpt-nerfed/scripts/nerfed\"; [ -f \"$S\" ] || S=\"$HOME/.codex/is-gpt-nerfed/plugin/skills/is-gpt-nerfed/scripts/nerfed\"; [ -f \"$S\" ] || exit 0; exec python3 \"$S\" hook --event SessionStart'",
               "timeout": 10,
-              "statusMessage": "is-gpt-nerfed: registering session"
+              "statusMessage": "is-gpt-nerfed: registering session",
+              "commandWindows": "powershell.exe -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -EncodedCommand JgAgAHsAIAAkAFAAcgBvAGcAcgBlAHMAcwBQAHIAZQBmAGUAcgBlAG4AYwBlACAAPQAgACcAUwBpAGwAZQBuAHQAbAB5AEMAbwBuAHQAaQBuAHUAZQAnADsAIAAkAHAAIAA9ACAAJABlAG4AdgA6AFAATABVAEcASQBOAF8AUgBPAE8AVAA7ACAAaQBmACAAKAAtAG4AbwB0ACAAJABwACkAIAB7ACAAJABwACAAPQAgACQAZQBuAHYAOgBDAEwAQQBVAEQARQBfAFAATABVAEcASQBOAF8AUgBPAE8AVAAgAH0AOwAgAGkAZgAgACgALQBuAG8AdAAgACQAcAApACAAewAgAFcAcgBpAHQAZQAtAE8AdQB0AHAAdQB0ACAAJwB7AH0AJwA7ACAAZQB4AGkAdAAgADAAIAB9ADsAIAAkAHMAIAA9ACAASgBvAGkAbgAtAFAAYQB0AGgAIAAkAHAAIAAnAHMAawBpAGwAbABzAC8AaQBzAC0AZwBwAHQALQBuAGUAcgBmAGUAZAAvAHMAYwByAGkAcAB0AHMALwBoAG8AbwBrAC0AdwBpAG4AZABvAHcAcwAuAHAAcwAxACcAOwAgAGkAZgAgACgAVABlAHMAdAAtAFAAYQB0AGgAIAAtAEwAaQB0AGUAcgBhAGwAUABhAHQAaAAgACQAcwAgAC0AUABhAHQAaABUAHkAcABlACAATABlAGEAZgApACAAewAgACYAIAAkAHMAIAAtAEUAdgBlAG4AdAAgACcAUwBlAHMAcwBpAG8AbgBTAHQAYQByAHQAJwAgAH0AIABlAGwAcwBlACAAewAgAFcAcgBpAHQAZQAtAE8AdQB0AHAAdQB0ACAAJwB7AH0AJwAgAH0AOwAgAGUAeABpAHQAIAAwACAAfQA="
             }
           ]
         }
@@ -37,7 +38,8 @@
               "type": "command",
               "command": "sh -c 'command -v python3 >/dev/null 2>&1 || exit 0; P=\"${PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}\"; S=\"$P/skills/is-gpt-nerfed/scripts/nerfed\"; [ -f \"$S\" ] || S=\"$HOME/.codex/is-gpt-nerfed/plugin/skills/is-gpt-nerfed/scripts/nerfed\"; [ -f \"$S\" ] || exit 0; exec python3 \"$S\" hook --event UserPromptSubmit'",
               "timeout": 10,
-              "additionalContextLimit": 4000
+              "additionalContextLimit": 4000,
+              "commandWindows": "powershell.exe -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -EncodedCommand JgAgAHsAIAAkAFAAcgBvAGcAcgBlAHMAcwBQAHIAZQBmAGUAcgBlAG4AYwBlACAAPQAgACcAUwBpAGwAZQBuAHQAbAB5AEMAbwBuAHQAaQBuAHUAZQAnADsAIAAkAHAAIAA9ACAAJABlAG4AdgA6AFAATABVAEcASQBOAF8AUgBPAE8AVAA7ACAAaQBmACAAKAAtAG4AbwB0ACAAJABwACkAIAB7ACAAJABwACAAPQAgACQAZQBuAHYAOgBDAEwAQQBVAEQARQBfAFAATABVAEcASQBOAF8AUgBPAE8AVAAgAH0AOwAgAGkAZgAgACgALQBuAG8AdAAgACQAcAApACAAewAgAFcAcgBpAHQAZQAtAE8AdQB0AHAAdQB0ACAAJwB7AH0AJwA7ACAAZQB4AGkAdAAgADAAIAB9ADsAIAAkAHMAIAA9ACAASgBvAGkAbgAtAFAAYQB0AGgAIAAkAHAAIAAnAHMAawBpAGwAbABzAC8AaQBzAC0AZwBwAHQALQBuAGUAcgBmAGUAZAAvAHMAYwByAGkAcAB0AHMALwBoAG8AbwBrAC0AdwBpAG4AZABvAHcAcwAuAHAAcwAxACcAOwAgAGkAZgAgACgAVABlAHMAdAAtAFAAYQB0AGgAIAAtAEwAaQB0AGUAcgBhAGwAUABhAHQAaAAgACQAcwAgAC0AUABhAHQAaABUAHkAcABlACAATABlAGEAZgApACAAewAgACYAIAAkAHMAIAAtAEUAdgBlAG4AdAAgACcAVQBzAGUAcgBQAHIAbwBtAHAAdABTAHUAYgBtAGkAdAAnACAAfQAgAGUAbABzAGUAIAB7ACAAVwByAGkAdABlAC0ATwB1AHQAcAB1AHQAIAAnAHsAfQAnACAAfQA7ACAAZQB4AGkAdAAgADAAIAB9AA=="
             }
           ]
         }
@@ -50,7 +52,8 @@
               "type": "command",
               "command": "sh -c 'command -v python3 >/dev/null 2>&1 || exit 0; P=\"${PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}\"; S=\"$P/skills/is-gpt-nerfed/scripts/nerfed\"; [ -f \"$S\" ] || S=\"$HOME/.codex/is-gpt-nerfed/plugin/skills/is-gpt-nerfed/scripts/nerfed\"; [ -f \"$S\" ] || exit 0; exec python3 \"$S\" hook --event PreToolUse'",
               "timeout": 5,
-              "additionalContextLimit": 4000
+              "additionalContextLimit": 4000,
+              "commandWindows": "powershell.exe -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -EncodedCommand JgAgAHsAIAAkAFAAcgBvAGcAcgBlAHMAcwBQAHIAZQBmAGUAcgBlAG4AYwBlACAAPQAgACcAUwBpAGwAZQBuAHQAbAB5AEMAbwBuAHQAaQBuAHUAZQAnADsAIAAkAHAAIAA9ACAAJABlAG4AdgA6AFAATABVAEcASQBOAF8AUgBPAE8AVAA7ACAAaQBmACAAKAAtAG4AbwB0ACAAJABwACkAIAB7ACAAJABwACAAPQAgACQAZQBuAHYAOgBDAEwAQQBVAEQARQBfAFAATABVAEcASQBOAF8AUgBPAE8AVAAgAH0AOwAgAGkAZgAgACgALQBuAG8AdAAgACQAcAApACAAewAgAFcAcgBpAHQAZQAtAE8AdQB0AHAAdQB0ACAAJwB7AH0AJwA7ACAAZQB4AGkAdAAgADAAIAB9ADsAIAAkAHMAIAA9ACAASgBvAGkAbgAtAFAAYQB0AGgAIAAkAHAAIAAnAHMAawBpAGwAbABzAC8AaQBzAC0AZwBwAHQALQBuAGUAcgBmAGUAZAAvAHMAYwByAGkAcAB0AHMALwBoAG8AbwBrAC0AdwBpAG4AZABvAHcAcwAuAHAAcwAxACcAOwAgAGkAZgAgACgAVABlAHMAdAAtAFAAYQB0AGgAIAAtAEwAaQB0AGUAcgBhAGwAUABhAHQAaAAgACQAcwAgAC0AUABhAHQAaABUAHkAcABlACAATABlAGEAZgApACAAewAgACYAIAAkAHMAIAAtAEUAdgBlAG4AdAAgACcAUAByAGUAVABvAG8AbABVAHMAZQAnACAAfQAgAGUAbABzAGUAIAB7ACAAVwByAGkAdABlAC0ATwB1AHQAcAB1AHQAIAAnAHsAfQAnACAAfQA7ACAAZQB4AGkAdAAgADAAIAB9AA=="
             }
           ]
         }
@@ -62,7 +65,8 @@
               "type": "command",
               "command": "sh -c 'command -v python3 >/dev/null 2>&1 || exit 0; P=\"${PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}\"; S=\"$P/skills/is-gpt-nerfed/scripts/nerfed\"; [ -f \"$S\" ] || S=\"$HOME/.codex/is-gpt-nerfed/plugin/skills/is-gpt-nerfed/scripts/nerfed\"; [ -f \"$S\" ] || exit 0; exec python3 \"$S\" hook --event Stop'",
               "timeout": 20,
-              "statusMessage": "is-gpt-nerfed: scanning session for silent downgrades"
+              "statusMessage": "is-gpt-nerfed: scanning session for silent downgrades",
+              "commandWindows": "powershell.exe -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -EncodedCommand JgAgAHsAIAAkAFAAcgBvAGcAcgBlAHMAcwBQAHIAZQBmAGUAcgBlAG4AYwBlACAAPQAgACcAUwBpAGwAZQBuAHQAbAB5AEMAbwBuAHQAaQBuAHUAZQAnADsAIAAkAHAAIAA9ACAAJABlAG4AdgA6AFAATABVAEcASQBOAF8AUgBPAE8AVAA7ACAAaQBmACAAKAAtAG4AbwB0ACAAJABwACkAIAB7ACAAJABwACAAPQAgACQAZQBuAHYAOgBDAEwAQQBVAEQARQBfAFAATABVAEcASQBOAF8AUgBPAE8AVAAgAH0AOwAgAGkAZgAgACgALQBuAG8AdAAgACQAcAApACAAewAgAFcAcgBpAHQAZQAtAE8AdQB0AHAAdQB0ACAAJwB7AH0AJwA7ACAAZQB4AGkAdAAgADAAIAB9ADsAIAAkAHMAIAA9ACAASgBvAGkAbgAtAFAAYQB0AGgAIAAkAHAAIAAnAHMAawBpAGwAbABzAC8AaQBzAC0AZwBwAHQALQBuAGUAcgBmAGUAZAAvAHMAYwByAGkAcAB0AHMALwBoAG8AbwBrAC0AdwBpAG4AZABvAHcAcwAuAHAAcwAxACcAOwAgAGkAZgAgACgAVABlAHMAdAAtAFAAYQB0AGgAIAAtAEwAaQB0AGUAcgBhAGwAUABhAHQAaAAgACQAcwAgAC0AUABhAHQAaABUAHkAcABlACAATABlAGEAZgApACAAewAgACYAIAAkAHMAIAAtAEUAdgBlAG4AdAAgACcAUwB0AG8AcAAnACAAfQAgAGUAbABzAGUAIAB7ACAAVwByAGkAdABlAC0ATwB1AHQAcAB1AHQAIAAnAHsAfQAnACAAfQA7ACAAZQB4AGkAdAAgADAAIAB9AA=="
             }
           ]
         }
@@ -73,7 +77,8 @@
             {
               "type": "command",
               "command": "sh -c 'command -v python3 >/dev/null 2>&1 || exit 0; P=\"${PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}\"; S=\"$P/skills/is-gpt-nerfed/scripts/nerfed\"; [ -f \"$S\" ] || S=\"$HOME/.codex/is-gpt-nerfed/plugin/skills/is-gpt-nerfed/scripts/nerfed\"; [ -f \"$S\" ] || exit 0; exec python3 \"$S\" hook --event SessionEnd'",
-              "timeout": 3
+              "timeout": 3,
+              "commandWindows": "powershell.exe -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -EncodedCommand JgAgAHsAIAAkAFAAcgBvAGcAcgBlAHMAcwBQAHIAZQBmAGUAcgBlAG4AYwBlACAAPQAgACcAUwBpAGwAZQBuAHQAbAB5AEMAbwBuAHQAaQBuAHUAZQAnADsAIAAkAHAAIAA9ACAAJABlAG4AdgA6AFAATABVAEcASQBOAF8AUgBPAE8AVAA7ACAAaQBmACAAKAAtAG4AbwB0ACAAJABwACkAIAB7ACAAJABwACAAPQAgACQAZQBuAHYAOgBDAEwAQQBVAEQARQBfAFAATABVAEcASQBOAF8AUgBPAE8AVAAgAH0AOwAgAGkAZgAgACgALQBuAG8AdAAgACQAcAApACAAewAgAFcAcgBpAHQAZQAtAE8AdQB0AHAAdQB0ACAAJwB7AH0AJwA7ACAAZQB4AGkAdAAgADAAIAB9ADsAIAAkAHMAIAA9ACAASgBvAGkAbgAtAFAAYQB0AGgAIAAkAHAAIAAnAHMAawBpAGwAbABzAC8AaQBzAC0AZwBwAHQALQBuAGUAcgBmAGUAZAAvAHMAYwByAGkAcAB0AHMALwBoAG8AbwBrAC0AdwBpAG4AZABvAHcAcwAuAHAAcwAxACcAOwAgAGkAZgAgACgAVABlAHMAdAAtAFAAYQB0AGgAIAAtAEwAaQB0AGUAcgBhAGwAUABhAHQAaAAgACQAcwAgAC0AUABhAHQAaABUAHkAcABlACAATABlAGEAZgApACAAewAgACYAIAAkAHMAIAAtAEUAdgBlAG4AdAAgACcAUwBlAHMAcwBpAG8AbgBFAG4AZAAnACAAfQAgAGUAbABzAGUAIAB7ACAAVwByAGkAdABlAC0ATwB1AHQAcAB1AHQAIAAnAHsAfQAnACAAfQA7ACAAZQB4AGkAdAAgADAAIAB9AA=="
             }
           ]
         }
@@ -82,8 +87,8 @@
   },
   "interface": {
     "displayName": "Is GPT nerfed?",
-    "shortDescription": "Catch silent model downgrades in your Codex sessions",
-    "longDescription": "is-gpt-nerfed watches every Codex session for silent model, reasoning-effort and context-window changes (zero tokens), and on a schedule you choose forks the thread ephemerally to run ModelTrace fingerprint probes that attribute the answering model. Results arrive as a card, a macOS notification and a message in the thread. Everything stays on your machine. Fingerprint bank and scorer: github.com/xqy2006/ModelTrace (MIT).",
+    "shortDescription": "Inspect routing evidence in local Codex sessions",
+    "longDescription": "Windows plugin and CLI port. Defaults to current-session passive checks with no auth.json access, broad session discovery, scheduled inference, or update checks. Fingerprints are statistical evidence, not proof of model identity. Cloud-orchestrated dot threads do not run these local plugin hooks. The macOS app is not ported.",
     "developerName": "is-gpt-nerfed contributors",
     "category": "Developer Tools",
     "capabilities": [

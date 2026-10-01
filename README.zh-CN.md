@@ -1,3 +1,7 @@
+> **Windows 移植版：** 本 fork 为本地 Windows Codex 增加被动 hooks。请阅读 [Windows 安装与使用说明](README.WINDOWS.zh-CN.md) 和 [移植范围、来源归属与验证说明](docs/WINDOWS-PORT.md)。主动指纹检测默认关闭；本地 hooks 不覆盖 dot 的云端编排对话。
+>
+> 基于原作者 [kiyoakii/is-gpt-nerfed](https://github.com/kiyoakii/is-gpt-nerfed) 的提交 [`ff0d7c0`](https://github.com/kiyoakii/is-gpt-nerfed/commit/ff0d7c0c8fdc8713273b6570b1ada1838eaad84c)。保留原项目 MIT 许可证和第三方归属声明。下文保留上游 macOS 文档。
+
 <p align="center"><img src="docs/social-preview.png" width="880" alt="is-gpt-nerfed：检测 Codex 模型是否缩水"></p>
 
 [English](README.md) · 简体中文

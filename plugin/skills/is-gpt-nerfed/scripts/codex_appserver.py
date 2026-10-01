@@ -17,8 +17,9 @@ import subprocess
 import threading
 import time
 import uuid
+import platform_support as platform
 
-CLIENT_INFO = {"name": "is-gpt-nerfed", "version": "0.5.3"}
+CLIENT_INFO = {"name": "is-gpt-nerfed", "version": "0.5.3-windows.2" if platform.IS_WINDOWS else "0.5.3"}
 FINISHED_TURN = ("completed", "interrupted", "failed")
 MESSAGE_ITEMS = ("userMessage", "agentMessage", "reasoning", "hookPrompt")
 
@@ -51,9 +52,12 @@ def fork_prompt(language: str, count: int) -> str:
 class AppServer:
     """JSON-RPC-over-stdio client. Server-initiated requests (approvals, user input) are always refused."""
 
-    def __init__(self, codex_bin: str, env: dict | None = None, hooks_enabled: bool = False, originator: str | None = None):
+    def __init__(self, codex_bin: str, env: dict | None = None, hooks_enabled: bool = False, originator: str | None = None,
+                 allow_active: bool = False):
+        self.allow_active = allow_active is True
         environ = dict(os.environ if env is None else env)
         environ["NERFED_PROBE_PROCESS"] = "1"
+        environ["PYTHONUTF8"] = "1"
         if originator:
             # The originator is the client name Codex reports to the service with every request (the desktop app says
             # "Codex Desktop"). A probe identifies itself as the client it checks for, in case routing depends on it;
@@ -61,11 +65,13 @@ class AppServer:
             environ["CODEX_INTERNAL_ORIGINATOR_OVERRIDE"] = originator
         # Our private app-server must not fire anyone's hooks or desktop notifications while it probes.
         # (`hooks_enabled` is only used to inspect/trust hook definitions; no turn ever runs in that mode.)
-        args = [codex_bin, "app-server", "--stdio", "-c", "notify=[]"]
+        args = [codex_bin, "app-server", "--stdio", "-c", "notify=[]",
+                "-c", 'sandbox_mode="read-only"', "-c", 'approval_policy="never"']
         if not hooks_enabled:
             args += ["-c", "features.hooks=false"]
         self.proc = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                     stderr=subprocess.DEVNULL, env=environ, text=True, bufsize=1)
+                                     stderr=subprocess.DEVNULL, env=environ, text=True, encoding="utf-8", errors="replace",
+                                     bufsize=1, **platform.process_options())
         self._write_lock = threading.Lock()
         self._cond = threading.Condition()
         self._next_id = 0
@@ -125,6 +131,8 @@ class AppServer:
                 self._cond.notify_all()
 
     def request(self, method: str, params: dict | None = None, timeout: float = 15.0):
+        if method in ("thread/start", "thread/fork", "turn/start") and not self.allow_active:
+            raise AppServerError("Active thread creation, copying and model turns require explicit approval and allow_active=True")
         with self._cond:
             self._next_id += 1
             request_id = self._next_id
@@ -250,7 +258,8 @@ def fork_at_latest_finished_turn(app: AppServer, thread: dict, on_wait=None, wai
 
 def fork_params(thread: dict, turn_id: str) -> dict:
     params = {"threadId": thread["id"], "lastTurnId": turn_id, "ephemeral": True, "excludeTurns": True,
-              "model": thread["model"], "modelProvider": thread["modelProvider"], "cwd": thread["cwd"]}
+              "model": thread["model"], "modelProvider": thread["modelProvider"], "cwd": thread["cwd"],
+              "approvalPolicy": "never", "sandbox": "readOnly"}
     if thread.get("reasoningEffort"):
         params["config"] = {"model_reasoning_effort": thread["reasoningEffort"]}
     return params
@@ -308,7 +317,11 @@ def run_turns(app: AppServer, forks: list[dict], deadline: float, parallel: bool
     def start(f: dict) -> None:
         f["started_at"] = time.time()
         try:
-            response = app.request("turn/start", {"threadId": f["id"], "input": [{"type": "text", "text": f["prompt"]}]},
+            # Explicit restrictions are required; an unsupported policy fails instead of silently retrying wider.
+            # This limits filesystem access but is not a guarantee that every native tool is unavailable.
+            response = app.request("turn/start", {"threadId": f["id"], "input": [{"type": "text", "text": f["prompt"]}],
+                                   "approvalPolicy": "never", "sandboxPolicy": {"type": "readOnly", "access": {
+                                       "type": "restricted", "includePlatformDefaults": False, "readableRoots": []}}},
                                    max(5.0, min(30.0, deadline - time.time())))
             f["turn_id"] = ((response or {}).get("turn") or {}).get("id")
         except AppServerError as e:
@@ -339,6 +352,11 @@ def run_turns(app: AppServer, forks: list[dict], deadline: float, parallel: bool
             return
         if method == "item/started":
             if (params.get("item") or {}).get("type") not in MESSAGE_ITEMS:
+                if f.get("turn_id"):
+                    try:
+                        app.request("turn/interrupt", {"threadId": f["id"], "turnId": f["turn_id"]}, 3)
+                    except AppServerError:
+                        pass
                 finish(f, f"probe attempted a tool ({(params.get('item') or {}).get('type')}); no sample accepted")
         elif method == "item/completed":
             item = params.get("item") or {}
@@ -395,12 +413,14 @@ def run_turns(app: AppServer, forks: list[dict], deadline: float, parallel: bool
 
 def probe_thread(codex_bin: str, thread_id: str, queries: int = 3, languages=("zh", "en"), timeout_s: float = 180,
                  parallel: bool = True, rng: random.Random | None = None, busy_wait_s: float = 0.0, on_wait=None,
-                 originator: str | None = None, hints: dict | None = None) -> dict:
+                 originator: str | None = None, hints: dict | None = None, allow_active: bool = False) -> dict:
     """Fork `thread_id` `queries` times (same finished turn), ask each fork for a number sequence, return the answers.
     A thread with a live turn is forked at its previous finished turn; if none is forkable, wait up to `busy_wait_s`."""
+    if allow_active is not True:
+        raise AppServerError("Active probes are disabled; copying a session and consuming quota require explicit approval")
     rng = rng or random.Random()
     t0 = time.time()
-    app = AppServer(codex_bin, originator=originator)
+    app = AppServer(codex_bin, originator=originator, allow_active=True)
     try:
         app.initialize()
         thread = read_thread(app, thread_id, hints)
@@ -438,7 +458,9 @@ def hook_belongs_to(hook: dict, plugin_name: str) -> bool:
     pid = str(hook.get("pluginId") or "")
     if pid == plugin_name or pid.startswith(plugin_name + "@"):
         return True
-    return f"/{plugin_name}/" in str(hook.get("sourcePath") or "") or f"/{plugin_name}/scripts/" in str(hook.get("command") or "")
+    source = str(hook.get("sourcePath") or "").replace("\\", "/")
+    command = str(hook.get("command") or "").replace("\\", "/")
+    return f"/{plugin_name}/" in source or f"/{plugin_name}/scripts/" in command
 
 
 def list_plugin_hooks(codex_bin: str, plugin_name: str) -> dict:
@@ -477,7 +499,7 @@ def trust_hooks(codex_bin: str, hooks: list[dict]) -> dict:
 
 def start_ephemeral(app: AppServer, model: str, effort: str | None, provider: str | None, cwd: str) -> dict:
     """Start a brand-new ephemeral thread (no history) with the given model settings."""
-    params = {"ephemeral": True, "model": model, "cwd": cwd}
+    params = {"ephemeral": True, "model": model, "cwd": cwd, "approvalPolicy": "never", "sandbox": "readOnly"}
     if provider:
         params["modelProvider"] = provider
     if effort:
@@ -495,14 +517,16 @@ def start_ephemeral(app: AppServer, model: str, effort: str | None, provider: st
 
 def probe_fresh(codex_bin: str, model: str, effort: str | None = None, provider: str | None = None, cwd: str | None = None,
                 queries: int = 3, languages=("zh", "en"), timeout_s: float = 180, parallel: bool = True,
-                rng: random.Random | None = None, originator: str | None = None) -> dict:
+                rng: random.Random | None = None, originator: str | None = None, allow_active: bool = False) -> dict:
     """Global probe: `queries` brand-new ephemeral sessions (no conversation context), one text-only turn each. With no
     `provider` Codex picks the one a new session of the user's gets (config.toml's model_provider, e.g. a relay)."""
+    if allow_active is not True:
+        raise AppServerError("Active probes are disabled; creating model turns and consuming quota require explicit approval")
     rng = rng or random.Random()
     cwd = cwd or os.path.expanduser("~")
     t0 = time.time()
     deadline = t0 + timeout_s
-    app = AppServer(codex_bin, originator=originator)
+    app = AppServer(codex_bin, originator=originator, allow_active=True)
     try:
         app.initialize()
         forks = []
@@ -526,10 +550,12 @@ def probe_fresh(codex_bin: str, model: str, effort: str | None = None, provider:
     }
 
 
-def fork_doctor(codex_bin: str, thread_id: str) -> dict:
+def fork_doctor(codex_bin: str, thread_id: str, allow_active: bool = False) -> dict:
     """Prove that an ephemeral fork of the thread can be created, without starting any model turn."""
+    if allow_active is not True:
+        raise AppServerError("Session-copy diagnostics require explicit approval and allow_active=True")
     t0 = time.time()
-    app = AppServer(codex_bin)
+    app = AppServer(codex_bin, allow_active=True)
     try:
         app.initialize()
         thread = read_thread(app, thread_id)
