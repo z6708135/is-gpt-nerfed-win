@@ -1,4 +1,5 @@
 > **Windows 移植版：** 本 fork 为本地 Windows Codex 增加被动 hooks。请阅读 [Windows 安装与使用说明](README.WINDOWS.zh-CN.md) 和 [移植范围、来源归属与验证说明](docs/WINDOWS-PORT.md)。主动指纹检测默认关闭；本地 hooks 不覆盖 dot 的云端编排对话。
+> **Windows 实测范围：** 插件 `0.5.3-windows.2` 已在 Codex Desktop `26.928.4866.0` 对话中自然触发 SessionStart、UserPromptSubmit、PreToolUse、Stop 各一次，完成 1 回合被动扫描及 1 次真实只读工具调用。桌面 SessionEnd、GUI 插件列表显示和命令进程退出码仍未验证，详见[验收说明](docs/WINDOWS-PORT.md)。主动指纹探针仍关闭，本次结果不证明服务端模型身份。
 >
 > 基于原作者 [kiyoakii/is-gpt-nerfed](https://github.com/kiyoakii/is-gpt-nerfed) 的提交 [`ff0d7c0`](https://github.com/kiyoakii/is-gpt-nerfed/commit/ff0d7c0c8fdc8713273b6570b1ada1838eaad84c)。保留原项目 MIT 许可证和第三方归属声明。下文保留上游 macOS 文档。
 

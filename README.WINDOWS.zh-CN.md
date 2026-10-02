@@ -4,17 +4,36 @@
 
 `0.5.3-windows.2` 为已审阅的 Windows hook 调度命令添加安全编码，并抑制 PowerShell 首次加载模块时的进度输出；调度操作和权限保持不变。可读源码及确定性生成器位于 [tools/build_windows_hooks.py](tools/build_windows_hooks.py)。修改源码不会更新已安装的 `0.5.3-windows.1` 或其受信任 hook 哈希。隔离离线模拟检查不能证明 hook 已在真实 Codex 会话中自然触发。
 
-这里只移植原生 Windows CLI、本地 hooks、安装和卸载流程。上游 [中文 README](https://github.com/kiyoakii/is-gpt-nerfed/blob/ff0d7c0c8fdc8713273b6570b1ada1838eaad84c/README.zh-CN.md) 中的 macOS 菜单栏 App、通知和安装脚本没有移植。
+这里移植原生 Windows CLI、本地 hooks、安装和卸载流程，并已验证下述 Windows 桌面对话的被动 hooks。上游 [中文 README](https://github.com/kiyoakii/is-gpt-nerfed/blob/ff0d7c0c8fdc8713273b6570b1ada1838eaad84c/README.zh-CN.md) 中的 macOS 菜单栏 App、通知和安装脚本没有移植。
 
 默认检查**当前明确指定的本地 Codex 会话**中的模型、推理强度、服务优先级和上下文窗口元数据变化。默认不发起模型请求，不读取 `auth.json`，不自动发现其他会话，不运行后台探测，不查询更新，也不记录工具命令正文。
 
 ## 当前验证状态
 
-本分支 20 项隔离测试全部通过：18 项 Windows 回归及 2 项计算一致性检查。五个 hook 命令经过真实外层 Windows PowerShell 5.1 和 pwsh，以合成会话数据完成测试；被动扫描器也成功读取明确指定的真实本地会话，未启动指纹探针。
+本分支 20 项隔离测试全部通过：18 项 Windows 回归及 2 项计算一致性检查。五个 hook 命令经过真实外层 Windows PowerShell 5.1 和 pwsh，以合成会话数据完成测试；被动扫描器也成功读取明确指定的真实本地会话，未启动指纹探针。经审阅的安装中，五个定义均启用并受信任；信任元数据与实际执行证据分别统计。
 
-经审阅的本地安装中，五个定义均启用并受信任。用户随后在原生 Codex CLI 0.159.2、只读沙箱中完成一个普通回合，真实触发 SessionStart、UserPromptSubmit、Stop、SessionEnd 各一次。插件 ledger 的这四条记录与此前五条合成记录分别统计；对应 session state 已被动扫描一个回合并标记会话结束，探针和警报均为零。核验没有额外创建模型回合。
+### 原生 CLI 测试
 
-该回合没有调用工具，所以本次未验收自然 PreToolUse；其 Windows 命令仍由隔离回归覆盖。rollout 未保存 hook 退出码，以上证据确认事件抵达 ledger 和被动状态更新，不宣称各 hook 的退出码。原生桌面客户端的自然触发及编排方式仍未验证；dot 云端编排不支持本地 command hooks。其他安装仍需审阅并信任自己的定义。模型元数据与统计一致性不证明服务端模型身份。
+用户在 Codex CLI 0.159.2、只读沙箱中完成一个普通回合，真实触发 SessionStart、UserPromptSubmit、Stop、SessionEnd 各一次。对应 session state 已被动扫描一个回合并标记会话结束，探针和警报均为零。该 CLI 回合没有调用工具，因此没有验收 PreToolUse。这四条真实记录与此前五条合成记录分别统计。
+
+### Windows 桌面测试
+
+随后在 Windows Codex Desktop **26.928.4866.0** 的新聊天中，使用插件 **0.5.3-windows.2**、后端 CLI **0.159.2**，完成一个普通回合和一次不递归、不写入的目录列举工具调用。选定会话的元数据标明 Codex Desktop；真实事件均指向已安装的 `.2` 插件缓存，证明运行时已加载插件，而不只是磁盘注册存在。
+
+| 桌面证据 | 实际结果 |
+| --- | --- |
+| SessionStart | 1 条自然事件 |
+| UserPromptSubmit | 1 条自然事件 |
+| PreToolUse | 真实工具调用对应的 1 条自然事件 |
+| Stop | 1 条自然事件 |
+| 被动分析 | 扫描 1 回合，记录 1 次真实工具调用；探针和警报均为 0 |
+| 工具返回 | 存在匹配的工具返回，回合已完成；rollout 未保留命令进程退出码 |
+| SessionEnd | 尚未观察；捕获的状态中会话仍未结束 |
+| GUI 插件列表 | 未目视检查；实际插件事件已确认运行时加载 |
+
+这四条桌面记录与早期 CLI 和合成记录分别统计，验证了该桌面对话的自动被动 hooks 及真实 PreToolUse 路径。尚未验收桌面 SessionEnd、GUI 列表显示、其他桌面模式或版本，也不宣称进程退出码。聊天仍在进行时缺少 SessionEnd 不表示失败；rollout 同样未保留 hook 退出码元数据。
+
+主动指纹探针保持关闭，核验没有额外创建模型回合。公开说明只保留客户端/插件版本、事件名称、数量和验收边界，不发布本机路径、项目或聊天名、会话 ID、会话正文、日志或私有配置。模型元数据与统计一致性不证明服务端模型身份。其他安装仍需审阅并信任自己的定义；dot 云端编排仍不支持本地 command hooks。
 
 ## 运行边界与版本
 

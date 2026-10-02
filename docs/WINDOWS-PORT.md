@@ -4,15 +4,34 @@ This Windows port is based on **kiyoakii's [is-gpt-nerfed](https://github.com/ki
 
 Release `0.5.3-windows.2` adds shell-safe encoding to the reviewed Windows hook dispatcher and suppresses PowerShell's first-use module progress chatter. Its dispatch actions and permissions are unchanged. The readable source and deterministic generator are in [tools/build_windows_hooks.py](../tools/build_windows_hooks.py). Editing this source does not update an existing `0.5.3-windows.1` installation or its trusted hook hashes. Offline synthetic hook checks do not establish that a hook fired naturally in a live Codex session.
 
-The Windows integration targets the standalone Codex CLI. Desktop hook execution must be verified for the actual client and orchestration mode: a local project directory, desktop originator, or native backend version does not establish local orchestration. OpenAI documents that [cloud-orchestrated ChatGPT Work does not support plugin or local command hooks](https://learn.chatgpt.com/docs/enterprise/agent-security), even when tools execute on the local computer. Manual passive scans and offline command tests remain separate from natural hook-dispatch evidence.
+The Windows integration covers the native Codex CLI and the Windows desktop conversation validated below. Actual command-hook arrivals establish execution for that tested desktop path; a local project directory, desktop originator, or backend version alone would not establish it. Other client versions and orchestration modes require their own validation. OpenAI documents that [cloud-orchestrated ChatGPT Work does not support plugin or local command hooks](https://learn.chatgpt.com/docs/enterprise/agent-security), even when tools execute on the local computer. Manual passive scans and offline command tests remain separate from natural hook-dispatch evidence.
 
 ## Current validation status
 
-All 20 isolated tests passed: 18 Windows regressions and 2 calculation-parity checks. Five hook commands passed through real outer Windows PowerShell 5.1 and pwsh using synthetic session data. The passive scanner also read an explicitly selected real local session without starting inference or fingerprint probes.
+All 20 isolated tests passed: 18 Windows regressions and 2 calculation-parity checks. Five hook commands passed through real outer Windows PowerShell 5.1 and pwsh using synthetic session data. The passive scanner also read an explicitly selected real local session without starting inference or fingerprint probes. The reviewed installation has five enabled, trusted definitions; trust metadata is separate from execution evidence.
 
-The reviewed local installation has five enabled, trusted definitions. A user-run ordinary, read-only turn in native Codex CLI 0.159.2 then naturally dispatched SessionStart, UserPromptSubmit, Stop, and SessionEnd. The plugin ledger contains one arrival for each event, separately from five earlier synthetic records; the matching session state records one passively scanned turn and an ended session, with zero probes or alerts. Verification created no additional model turn.
+### Native CLI test
 
-That turn made no tool calls, so natural PreToolUse dispatch was not exercised; its Windows command remains covered by the isolated regression. The rollout did not retain hook exit-code metadata, so these results establish ledger arrivals and passive state updates rather than a claim about every hook exit code. Native desktop lifecycle dispatch and its orchestration mode remain unverified. Cloud-orchestrated dot command hooks are unsupported. Users must review and trust definitions in their own installations. Recorded model metadata and statistical matches do not prove server-side model identity.
+A user-run ordinary, read-only turn in Codex CLI 0.159.2 naturally dispatched SessionStart, UserPromptSubmit, Stop, and SessionEnd once each. The matching session state records one passively scanned turn and an ended session, with zero probes or alerts. That CLI turn made no tool calls, so it did not exercise PreToolUse. Its four real records were counted separately from five earlier synthetic records.
+
+### Windows desktop test
+
+A subsequent new chat in Windows Codex Desktop **26.928.4866.0**, using plugin **0.5.3-windows.2** and backend CLI **0.159.2**, completed one ordinary turn with one non-recursive, read-only directory-listing tool call. The selected session metadata identifies Codex Desktop; its events point to the installed `.2` plugin cache, establishing runtime loading rather than merely a disk registration.
+
+| Desktop evidence | Observed result |
+| --- | --- |
+| SessionStart | 1 natural event |
+| UserPromptSubmit | 1 natural event |
+| PreToolUse | 1 natural event for the real tool call |
+| Stop | 1 natural event |
+| Passive analysis | 1 scanned turn and 1 recorded tool call; 0 probes and 0 alerts |
+| Tool result | A matching tool return exists and the turn completed; the process exit code was not retained in the rollout |
+| SessionEnd | Not observed; the session had not ended in the captured state |
+| GUI plugin list | Not inspected visually; runtime loading is confirmed by the actual plugin events |
+
+These four desktop records were separated from the earlier CLI and synthetic records. This verifies automatic passive hooks and the real PreToolUse path for the tested desktop conversation. It does not establish desktop SessionEnd, GUI list visibility, every other desktop mode/version, or a process exit code. The missing SessionEnd while the chat remained active is not a failure. Hook exit-code metadata was also absent from the rollout.
+
+Active fingerprint probes remained disabled, and verification created no additional model turn. Public results retain only client/plugin versions, event names, counts, and verification limits; no local paths, project/chat names, session IDs, conversation bodies, logs, or private configuration are published. Recorded model metadata and statistical matches do not prove server-side model identity. Users must review and trust definitions in their own installations. Cloud-orchestrated dot command hooks remain unsupported.
 
 ## Attribution and license
 

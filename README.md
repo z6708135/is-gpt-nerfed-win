@@ -1,4 +1,5 @@
 > **Windows port:** This fork adds passive hooks for local Codex on Windows. See the [Windows guide (中文)](README.WINDOWS.zh-CN.md) and [port scope, attribution, and validation](docs/WINDOWS-PORT.md). Active fingerprint probes are disabled by default. Local hooks do not cover cloud-orchestrated ChatGPT Work (dot) conversations.
+> **Validated Windows scope:** With plugin `0.5.3-windows.2`, a Codex Desktop `26.928.4866.0` conversation naturally dispatched SessionStart, UserPromptSubmit, PreToolUse, and Stop once each, with one passively scanned turn and one real read-only tool call. Desktop SessionEnd, GUI plugin-list visibility, and the command process exit code remain unverified. See the [validation details](docs/WINDOWS-PORT.md); active fingerprint probes remain off, and this does not prove server-side model identity.
 >
 > Based on [kiyoakii/is-gpt-nerfed](https://github.com/kiyoakii/is-gpt-nerfed) at [`ff0d7c0`](https://github.com/kiyoakii/is-gpt-nerfed/commit/ff0d7c0c8fdc8713273b6570b1ada1838eaad84c). The upstream MIT license and third-party notices are retained. The original macOS documentation follows.
 
